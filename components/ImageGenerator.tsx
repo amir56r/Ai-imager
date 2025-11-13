@@ -1,6 +1,7 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { MODELS, ASPECT_RATIOS } from '../constants';
-import { generateImages, editImage } from '../services/geminiService';
+import { generateImages, editImage, supportsApiKeySelection, selectApiKey } from '../services/geminiService';
 import type { GeneratedImage } from '../types';
 import ImageGrid from './ImageGrid';
 import Spinner from './Spinner';
@@ -28,6 +29,7 @@ const ImageGenerator: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [isApiKeyError, setIsApiKeyError] = useState(false);
 
   // Edit Mode State
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
@@ -144,6 +146,16 @@ const ImageGenerator: React.FC = () => {
     setPrompt(editPrompt);
   };
 
+  const handleSelectKey = async () => {
+    try {
+        await selectApiKey();
+        setError(null);
+        setIsApiKeyError(false);
+    } catch (e) {
+        console.error("Failed to select key", e);
+    }
+  };
+
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       setError('Please enter a prompt.');
@@ -151,10 +163,9 @@ const ImageGenerator: React.FC = () => {
     }
 
     setError(null);
+    setIsApiKeyError(false);
     setIsLoading(true);
     
-    // Keep previous images visible while loading new ones in a real app, 
-    // but here we clear to show loading state clearly
     setGeneratedImages([]);
 
     try {
@@ -175,7 +186,13 @@ const ImageGenerator: React.FC = () => {
 
       setGeneratedImages(images);
     } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred.');
+      console.error(err);
+      if (err.message === 'API_KEY_MISSING' || err.message === 'API_KEY_INVALID') {
+        setIsApiKeyError(true);
+        setError(null); // Clear text error to show banner
+      } else {
+        setError(err.message || 'An unexpected error occurred.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -187,6 +204,44 @@ const ImageGenerator: React.FC = () => {
         <h1 className="text-3xl md:text-4xl font-extrabold text-center text-slate-800 dark:text-white mb-6">
           AI Creative Studio
         </h1>
+
+        {/* API Key Error Banner */}
+        {isApiKeyError && (
+            <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg">
+                <div className="flex items-start">
+                    <div className="flex-shrink-0">
+                        <svg className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                    </div>
+                    <div className="ml-3">
+                        <h3 className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                            API Key Required
+                        </h3>
+                        <div className="mt-2 text-sm text-amber-700 dark:text-amber-300">
+                            {supportsApiKeySelection() ? (
+                                <div>
+                                    <p className="mb-2">You need to select a Google Cloud Project or API Key to continue.</p>
+                                    <button 
+                                        onClick={handleSelectKey}
+                                        className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-sm font-semibold transition-colors"
+                                    >
+                                        Select API Key
+                                    </button>
+                                </div>
+                            ) : (
+                                <p>
+                                    It looks like the API key is missing or invalid. 
+                                    If you are hosting this application, please ensure you have set the 
+                                    <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-800 rounded">API_KEY</code> 
+                                    environment variable in your hosting provider's settings.
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )}
 
         {/* Tabs */}
         <div className="flex justify-center mb-8">
