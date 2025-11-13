@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import type { GeneratedImage } from '../types';
 
 type AspectRatio = '1:1' | '3:4' | '4:3' | '9:16' | '16:9';
@@ -42,5 +42,63 @@ export const generateImages = async (
        throw new Error('The provided API key is invalid. Please check your configuration.');
     }
     throw new Error('Failed to generate images. The AI service may be busy or unavailable.');
+  }
+};
+
+export const editImage = async (
+  imageBase64: string,
+  mimeType: string,
+  prompt: string
+): Promise<GeneratedImage[]> => {
+  if (!process.env.API_KEY) {
+    throw new Error("API key not found.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: imageBase64,
+              mimeType: mimeType,
+            },
+          },
+          {
+            text: prompt,
+          },
+        ],
+      },
+      config: {
+        responseModalities: [Modality.IMAGE],
+      },
+    });
+
+    const images: GeneratedImage[] = [];
+    if (response.candidates?.[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+           images.push({
+             id: `edit-${Date.now()}-${images.length}`,
+             src: `data:image/png;base64,${part.inlineData.data}`,
+             prompt: prompt,
+             model: 'gemini-2.5-flash-image'
+           });
+        }
+      }
+    }
+
+    if (images.length === 0) {
+      throw new Error("No image was returned by the model.");
+    }
+    
+    return images;
+
+  } catch (error) {
+    console.error('Error editing image:', error);
+    throw new Error('Failed to edit image. ' + (error instanceof Error ? error.message : ''));
   }
 };

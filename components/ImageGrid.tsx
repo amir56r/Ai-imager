@@ -19,24 +19,49 @@ const ImageGrid: React.FC<ImageGridProps> = ({ images }) => {
     link.click();
     document.body.removeChild(link);
   };
+
+  const handleDownloadAll = () => {
+    if (images.length === 0) return;
+    
+    // We stagger downloads slightly to prevent browser throttling/blocking of multiple simultaneous downloads
+    images.forEach((image, index) => {
+      setTimeout(() => {
+        handleDownload(image.src, `${image.prompt}-${index}`);
+      }, index * 400);
+    });
+  };
   
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-      {images.map((image) => (
-        <div key={image.id} className="group relative overflow-hidden rounded-xl shadow-lg dark:shadow-glow-blue/20 transition-all duration-300 ease-in-out hover:shadow-2xl hover:scale-105">
-          <img src={image.src} alt={image.prompt} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
-            <p className="text-white text-sm opacity-0 group-hover:opacity-100 transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 line-clamp-2">
-              {image.prompt}
-            </p>
-            <div className="flex items-center justify-end space-x-2 mt-2 opacity-0 group-hover:opacity-100 transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 delay-100">
-              <button onClick={() => handleDownload(image.src, image.prompt)} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors"><DownloadIcon /></button>
-              <button onClick={() => alert('Save feature coming soon!')} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors"><SaveIcon /></button>
-              <button onClick={() => alert('Share feature coming soon!')} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors"><ShareIcon /></button>
+    <div className="space-y-4">
+      {images.length > 0 && (
+        <div className="flex justify-end">
+            <button 
+              onClick={handleDownloadAll}
+              className="flex items-center space-x-2 px-4 py-2 bg-purple-100 dark:bg-purple-900/30 hover:bg-purple-200 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded-lg transition-colors font-medium text-sm border border-purple-200 dark:border-purple-800"
+              title="Download all images"
+            >
+                <DownloadIcon />
+                <span>Download All ({images.length})</span>
+            </button>
+        </div>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {images.map((image) => (
+          <div key={image.id} className="group relative overflow-hidden rounded-xl shadow-lg dark:shadow-glow-blue/20 transition-all duration-300 ease-in-out hover:shadow-2xl hover:scale-105">
+            <img src={image.src} alt={image.prompt} className="w-full h-full object-cover" />
+            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
+              <p className="text-white text-sm opacity-0 group-hover:opacity-100 transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 line-clamp-2">
+                {image.prompt}
+              </p>
+              <div className="flex items-center justify-end space-x-2 mt-2 opacity-0 group-hover:opacity-100 transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 delay-100">
+                <button onClick={() => handleDownload(image.src, image.prompt)} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors" title="Download"><DownloadIcon /></button>
+                <button onClick={() => alert('Save feature coming soon!')} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors" title="Save"><SaveIcon /></button>
+                <button onClick={() => alert('Share feature coming soon!')} className="p-2 bg-white/20 rounded-full text-white hover:bg-white/40 transition-colors" title="Share"><ShareIcon /></button>
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 };
