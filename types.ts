@@ -1,3 +1,4 @@
+
 export interface GeneratedImage {
   id: string;
   src: string;
@@ -10,4 +11,16 @@ export interface User {
   username: string;
   email: string;
   passwordHash: string;
+}
+
+declare global {
+  // Interface for AIStudio object on window
+  interface AIStudio {
+    openSelectKey: () => Promise<void>;
+    hasSelectedApiKey: () => Promise<boolean>;
+  }
+
+  interface Window {
+    aistudio?: AIStudio;
+  }
 }

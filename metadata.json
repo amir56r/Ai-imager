@@ -1,7 +1,8 @@
 {
-  "name": "AI Imager",
-  "description": "A modern, beautiful, and responsive AI Image Generator website. Users can generate, view, and manage images created by powerful AI models.",
+  "name": "AI Imager Pro",
+  "description": "High-fidelity AI image generation and editing using Gemini Pro and Flash models.",
   "requestFramePermissions": [
-    "camera"
+    "camera",
+    "microphone"
   ]
 }

@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { MODELS, ASPECT_RATIOS } from '../constants';
-import { generateImages, editImage, supportsApiKeySelection, selectApiKey } from '../services/geminiService';
+import { MODELS, ASPECT_RATIOS, IMAGE_SIZES } from '../constants';
+import { generateImages, editImage } from '../services/geminiService';
 import type { GeneratedImage } from '../types';
 import ImageGrid from './ImageGrid';
 import Spinner from './Spinner';
@@ -26,10 +26,11 @@ const ImageGenerator: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
   const [aspectRatio, setAspectRatio] = useState(ASPECT_RATIOS[0].value);
+  const [imageSize, setImageSize] = useState<'1K' | '2K' | '4K'>('1K');
   const [isLoading, setIsLoading] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [isApiKeyError, setIsApiKeyError] = useState(false);
+  const [showKeyPrompt, setShowKeyPrompt] = useState(false);
 
   // Edit Mode State
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
@@ -42,7 +43,6 @@ const ImageGenerator: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
 
-  // Cleanup stream on unmount
   useEffect(() => {
     return () => {
       if (stream) {
@@ -51,22 +51,40 @@ const ImageGenerator: React.FC = () => {
     };
   }, [stream]);
 
+  const checkApiKeyRequirement = async () => {
+    if (selectedModel === 'gemini-3-pro-image-preview' || selectedModel === 'imagen-4.0-generate-001') {
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        if (!hasKey) {
+          setShowKeyPrompt(true);
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  const handleOpenSelectKey = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      setShowKeyPrompt(false);
+      // Proceeding directly as per race condition instructions
+      handleGenerate();
+    }
+  };
+
   const processFile = (file: File) => {
     if (!file.type.startsWith('image/')) {
       setError('Please upload a valid image file (PNG, JPEG).');
       return;
     }
-
-    // Check file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
         setError('Image size should be less than 5MB.');
         return;
     }
-
     const reader = new FileReader();
     reader.onloadend = () => {
-      const result = reader.result as string;
-      setUploadedImage(result);
+      setUploadedImage(reader.result as string);
       setUploadedImageMime(file.type);
       setError(null);
     };
@@ -75,23 +93,6 @@ const ImageGenerator: React.FC = () => {
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) processFile(file);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
     if (file) processFile(file);
   };
 
@@ -104,7 +105,6 @@ const ImageGenerator: React.FC = () => {
         videoRef.current.srcObject = mediaStream;
       }
     } catch (err) {
-      console.error("Error accessing camera:", err);
       setError("Could not access camera. Please allow permissions.");
       setShowCamera(false);
     }
@@ -118,8 +118,7 @@ const ImageGenerator: React.FC = () => {
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(videoRef.current, 0, 0);
-        const dataUrl = canvas.toDataURL('image/jpeg');
-        setUploadedImage(dataUrl);
+        setUploadedImage(canvas.toDataURL('image/jpeg'));
         setUploadedImageMime('image/jpeg');
         stopCamera();
       }
@@ -134,62 +133,32 @@ const ImageGenerator: React.FC = () => {
     setShowCamera(false);
   };
 
-  const clearUploadedImage = () => {
-    setUploadedImage(null);
-    setUploadedImageMime('');
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const applyQuickEdit = (editPrompt: string) => {
-    setPrompt(editPrompt);
-  };
-
-  const handleSelectKey = async () => {
-    try {
-        await selectApiKey();
-        setError(null);
-        setIsApiKeyError(false);
-    } catch (e) {
-        console.error("Failed to select key", e);
-    }
-  };
-
   const handleGenerate = async () => {
-    if (!prompt.trim()) {
+    if (!prompt.trim() && mode === 'generate') {
       setError('Please enter a prompt.');
       return;
     }
 
+    const ready = await checkApiKeyRequirement();
+    if (!ready) return;
+
     setError(null);
-    setIsApiKeyError(false);
     setIsLoading(true);
-    
     setGeneratedImages([]);
 
     try {
       let images: GeneratedImage[] = [];
-
       if (mode === 'generate') {
-        if (selectedModel !== 'imagen-4.0-generate-001' && selectedModel !== 'gemini-2.5-flash-image') {
-           throw new Error(`Model "${MODELS.find(m => m.id === selectedModel)?.name}" is a placeholder.`);
-        }
-        images = await generateImages(prompt, selectedModel, 4, aspectRatio);
+        images = await generateImages(prompt, selectedModel, 1, aspectRatio, imageSize);
       } else {
-        if (!uploadedImage) {
-          throw new Error('Please upload an image to edit.');
-        }
+        if (!uploadedImage) throw new Error('Please upload an image.');
         const base64Data = uploadedImage.split(',')[1];
         images = await editImage(base64Data, uploadedImageMime, prompt);
       }
-
       setGeneratedImages(images);
     } catch (err: any) {
-      console.error(err);
-      if (err.message === 'API_KEY_MISSING' || err.message === 'API_KEY_INVALID') {
-        setIsApiKeyError(true);
-        setError(null); // Clear text error to show banner
+      if (err.message === "API_KEY_RESET_REQUIRED") {
+        setShowKeyPrompt(true);
       } else {
         setError(err.message || 'An unexpected error occurred.');
       }
@@ -199,291 +168,185 @@ const ImageGenerator: React.FC = () => {
   };
 
   return (
-    <section className="flex flex-col items-center w-full">
-      <div className="w-full max-w-4xl p-6 md:p-8 bg-white dark:bg-slate-800 rounded-2xl shadow-lg dark:shadow-glow-purple/20 border border-slate-200 dark:border-slate-700">
-        <h1 className="text-3xl md:text-4xl font-extrabold text-center text-slate-800 dark:text-white mb-6">
-          AI Creative Studio
-        </h1>
-
-        {/* API Key Error Banner */}
-        {isApiKeyError && (
-            <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg">
-                <div className="flex items-start">
-                    <div className="flex-shrink-0">
-                        <svg className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                        </svg>
-                    </div>
-                    <div className="ml-3">
-                        <h3 className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                            API Key Required
-                        </h3>
-                        <div className="mt-2 text-sm text-amber-700 dark:text-amber-300">
-                            {supportsApiKeySelection() ? (
-                                <div>
-                                    <p className="mb-2">You need to select a Google Cloud Project or API Key to continue.</p>
-                                    <button 
-                                        onClick={handleSelectKey}
-                                        className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-sm font-semibold transition-colors"
-                                    >
-                                        Select API Key
-                                    </button>
-                                </div>
-                            ) : (
-                                <p>
-                                    It looks like the API key is missing or invalid. 
-                                    If you are hosting this application, please ensure you have set the 
-                                    <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-800 rounded">API_KEY</code> 
-                                    environment variable in your hosting provider's settings.
-                                </p>
-                            )}
-                        </div>
-                    </div>
-                </div>
+    <section className="flex flex-col items-center w-full max-w-6xl mx-auto px-4">
+      {/* Key Requirement Modal */}
+      {showKeyPrompt && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/80 backdrop-blur-sm p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full p-8 text-center animate-in fade-in zoom-in duration-300">
+            <div className="mx-auto w-16 h-16 bg-blue-100 dark:bg-blue-900/50 rounded-full flex items-center justify-center mb-6">
+              <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
             </div>
-        )}
+            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">API Key Required</h3>
+            <p className="text-slate-600 dark:text-slate-400 mb-6">
+              This high-quality model requires a paid Google Cloud Project API key. 
+              <br />
+              <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Learn about billing</a>
+            </p>
+            <div className="flex flex-col gap-3">
+              <button onClick={handleOpenSelectKey} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors">
+                Select API Key
+              </button>
+              <button onClick={() => {setShowKeyPrompt(false); setSelectedModel('gemini-2.5-flash-image');}} className="w-full py-3 bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                Use Fast Model Instead
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-        {/* Tabs */}
-        <div className="flex justify-center mb-8">
-          <div className="bg-slate-100 dark:bg-slate-700 p-1 rounded-xl flex">
+      <div className="w-full p-8 bg-white dark:bg-slate-800/50 backdrop-blur-md rounded-3xl shadow-xl border border-slate-200 dark:border-slate-700/50 mb-12">
+        <div className="flex flex-col md:flex-row items-center justify-between mb-8 gap-4">
+          <h1 className="text-3xl font-black bg-gradient-to-r from-blue-500 to-indigo-600 bg-clip-text text-transparent">
+            CREATIVE STUDIO
+          </h1>
+          <div className="bg-slate-100 dark:bg-slate-700/50 p-1.5 rounded-2xl flex">
             <button
               onClick={() => setMode('generate')}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-lg text-sm font-bold transition-all duration-200 ${
-                mode === 'generate'
-                  ? 'bg-white dark:bg-slate-600 text-purple-600 dark:text-purple-400 shadow-sm'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-              }`}
+              className={`flex items-center space-x-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${mode === 'generate' ? 'bg-white dark:bg-slate-600 text-blue-600 dark:text-white shadow-md' : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
             >
-              <SparklesIcon />
-              <span>Text to Image</span>
+              <SparklesIcon /> <span>Create</span>
             </button>
             <button
               onClick={() => setMode('edit')}
-              className={`flex items-center space-x-2 px-6 py-3 rounded-lg text-sm font-bold transition-all duration-200 ${
-                mode === 'edit'
-                  ? 'bg-white dark:bg-slate-600 text-blue-500 dark:text-blue-400 shadow-sm'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-              }`}
+              className={`flex items-center space-x-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${mode === 'edit' ? 'bg-white dark:bg-slate-600 text-indigo-600 dark:text-white shadow-md' : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
             >
-              <div className="h-5 w-5"><PencilIcon /></div>
-              <span>Image Editing</span>
+              <div className="w-5 h-5"><PencilIcon /></div> <span>Edit</span>
             </button>
           </div>
         </div>
 
-        {/* Edit Mode Upload Area */}
         {mode === 'edit' && (
-          <div className="mb-6">
+          <div className="mb-8">
             {!uploadedImage && !showCamera ? (
               <div 
-                className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-colors ${
-                    isDragging 
-                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' 
-                        : 'border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700/50'
-                }`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
+                className={`group border-2 border-dashed rounded-3xl p-12 flex flex-col items-center justify-center text-center transition-all ${isDragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/10' : 'border-slate-300 dark:border-slate-600 hover:border-blue-400 hover:bg-slate-50/50 dark:hover:bg-slate-700/30'}`}
+                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files?.[0]; if (f) processFile(f); }}
               >
-                <UploadIcon />
-                <p className="mt-4 text-lg font-medium text-slate-700 dark:text-slate-200">
-                  Drag & drop your image here
-                </p>
-                <div className="flex items-center space-x-2 mt-3">
-                    <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="px-4 py-2 text-sm bg-slate-200 dark:bg-slate-600 rounded-full hover:bg-slate-300 dark:hover:bg-slate-500 transition-colors text-slate-800 dark:text-white font-semibold"
-                    >
-                        Browse Files
-                    </button>
-                    <span className="text-slate-400">or</span>
-                    <button 
-                        onClick={startCamera}
-                        className="flex items-center space-x-1 px-4 py-2 text-sm bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors font-semibold"
-                    >
-                        <CameraIcon />
-                        <span>Camera</span>
-                    </button>
+                <div className="w-20 h-20 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <UploadIcon />
                 </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-4">
-                  PNG, JPG up to 5MB
-                </p>
-                <input 
-                  type="file" 
-                  ref={fileInputRef}
-                  className="hidden" 
-                  accept="image/*"
-                  onChange={handleFileUpload}
-                />
+                <p className="text-xl font-bold text-slate-800 dark:text-white mb-2">Drop your image here</p>
+                <div className="flex gap-4 mt-4">
+                  <button onClick={() => fileInputRef.current?.click()} className="px-6 py-2.5 bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900 rounded-xl font-bold text-sm shadow-lg hover:opacity-90 transition-opacity">Browse Files</button>
+                  <button onClick={startCamera} className="px-6 py-2.5 bg-blue-500 text-white rounded-xl font-bold text-sm shadow-lg flex items-center gap-2 hover:bg-blue-600 transition-colors"><CameraIcon /> Camera</button>
+                </div>
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
               </div>
             ) : showCamera ? (
-               <div className="relative w-full max-w-lg mx-auto rounded-xl overflow-hidden shadow-lg bg-black">
-                   <video 
-                       ref={videoRef} 
-                       autoPlay 
-                       playsInline 
-                       muted
-                       onLoadedMetadata={() => videoRef.current?.play()}
-                       className="w-full h-64 md:h-96 object-cover"
-                   />
-                   <div className="absolute bottom-4 left-0 right-0 flex justify-center space-x-4">
-                       <button 
-                           onClick={stopCamera}
-                           className="p-2 bg-white/20 backdrop-blur-md rounded-full text-white hover:bg-white/30"
-                       >
-                           <XIcon />
-                       </button>
-                       <button 
-                           onClick={capturePhoto}
-                           className="px-6 py-2 bg-white text-black font-bold rounded-full shadow-lg hover:bg-gray-200 transform active:scale-95 transition-all"
-                       >
-                           Capture
-                       </button>
-                   </div>
-               </div>
+              <div className="relative aspect-video max-w-2xl mx-auto rounded-3xl overflow-hidden shadow-2xl bg-black">
+                <video ref={videoRef} autoPlay playsInline muted onLoadedMetadata={() => videoRef.current?.play()} className="w-full h-full object-cover" />
+                <div className="absolute bottom-6 left-0 right-0 flex justify-center gap-4">
+                  <button onClick={stopCamera} className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white hover:bg-white/30 transition-colors"><XIcon /></button>
+                  <button onClick={capturePhoto} className="px-8 py-3 bg-white text-slate-900 font-black rounded-full shadow-2xl hover:bg-slate-100 transition-colors active:scale-95">CAPTURE</button>
+                </div>
+              </div>
             ) : (
-              <div className="relative w-full max-w-sm mx-auto rounded-xl overflow-hidden shadow-md border border-slate-200 dark:border-slate-600 group">
-                <img src={uploadedImage || ''} alt="Uploaded preview" className="w-full h-auto" />
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <button 
-                    onClick={clearUploadedImage}
-                    className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg shadow-lg transition-colors flex items-center space-x-2"
-                    >
-                    <XIcon />
-                    <span>Remove Image</span>
-                    </button>
+              <div className="relative group max-w-md mx-auto rounded-3xl overflow-hidden shadow-2xl border border-slate-200 dark:border-slate-700">
+                <img src={uploadedImage || ''} alt="Preview" className="w-full h-auto" />
+                <div className="absolute inset-0 bg-slate-900/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity backdrop-blur-[2px]">
+                  <button onClick={() => setUploadedImage(null)} className="px-6 py-3 bg-red-500 text-white font-bold rounded-xl shadow-xl hover:bg-red-600 transition-all flex items-center gap-2">
+                    <XIcon /> Remove
+                  </button>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Prompt Input */}
-        <div className="mb-4">
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder={
-              mode === 'generate'
-                ? "A futuristic cityscape at sunset, with flying cars and neon lights, hyperrealistic..."
-                : "Describe the changes (e.g., 'Add a retro filter', 'Remove the person in the background')..."
-            }
-            rows={3}
-            className="w-full p-4 bg-slate-100 dark:bg-slate-700 border-2 border-transparent focus:border-purple-500 focus:ring-purple-500 rounded-lg transition resize-none placeholder-slate-400 dark:placeholder-slate-500 text-slate-800 dark:text-white"
-            disabled={isLoading}
-          />
-          
-          {/* Quick Edits Chips */}
-          {mode === 'edit' && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center mr-1">
-                <SparklesIcon /> <span className="ml-1">Try:</span>
-              </span>
-              {QUICK_EDITS.map((edit) => (
-                <button
-                  key={edit.label}
-                  onClick={() => applyQuickEdit(edit.prompt)}
-                  className="px-3 py-1 text-xs bg-slate-200 dark:bg-slate-600 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-slate-700 dark:text-slate-200 rounded-full transition-colors border border-transparent hover:border-blue-300"
-                >
-                  {edit.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Controls */}
-        <div className="flex flex-col md:flex-row items-center justify-between gap-4 mt-6">
-          
-          {mode === 'generate' ? (
-            <div className="flex flex-col md:flex-row gap-4 w-full md:w-auto">
-              {/* Aspect Ratio Selector */}
-              <div className="flex flex-wrap gap-2 justify-center md:justify-start">
-                {ASPECT_RATIOS.map((ratio) => (
-                  <button
-                    key={ratio.value}
-                    onClick={() => setAspectRatio(ratio.value)}
-                    disabled={isLoading}
-                    className={`px-3 py-2 text-xs font-semibold rounded-lg transition-colors duration-200 disabled:opacity-50 ${
-                        aspectRatio === ratio.value
-                            ? 'bg-purple-600 text-white shadow-md'
-                            : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
-                    }`}
-                  >
-                    {ratio.label}
+        <div className="space-y-6">
+          <div className="relative">
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={mode === 'generate' ? "Describe the scene in detail... (e.g. 'A futuristic astronaut exploring a neon jungle, cinematic lighting')" : "What do you want to change? (e.g. 'Change the sky to a purple sunset')"}
+              className="w-full p-6 bg-slate-100 dark:bg-slate-700/50 border-2 border-transparent focus:border-blue-500 focus:bg-white dark:focus:bg-slate-700 rounded-3xl transition-all resize-none text-lg min-h-[140px] text-slate-900 dark:text-white"
+            />
+            {mode === 'edit' && (
+              <div className="flex flex-wrap gap-2 mt-4 px-2">
+                {QUICK_EDITS.map((edit) => (
+                  <button key={edit.label} onClick={() => setPrompt(edit.prompt)} className="px-4 py-1.5 text-xs font-bold bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 text-slate-700 dark:text-slate-200 rounded-full hover:border-blue-400 dark:hover:border-blue-400 hover:text-blue-500 transition-all shadow-sm">
+                    {edit.label}
                   </button>
                 ))}
               </div>
+            )}
+          </div>
 
-              {/* Model Selector */}
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="w-full md:w-auto px-4 py-2 bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white border-transparent rounded-lg focus:ring-purple-500 focus:border-purple-500 transition text-sm"
-                disabled={isLoading}
-              >
-                {MODELS.map((model) => (
-                  <option key={model.id} value={model.id}>{model.name}</option>
-                ))}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
+            <div>
+              <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-2">Model</label>
+              <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full p-3.5 bg-slate-100 dark:bg-slate-700 rounded-2xl font-bold text-sm text-slate-800 dark:text-white appearance-none border-2 border-transparent focus:border-blue-500 cursor-pointer">
+                {MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
             </div>
-          ) : (
-             <div className="text-sm text-slate-500 dark:text-slate-400 italic flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                Powered by Gemini 2.5 Flash Image
-             </div>
-          )}
-
-          <button
-            onClick={handleGenerate}
-            disabled={isLoading || (mode === 'edit' && !uploadedImage)}
-            className={`w-full md:w-auto px-8 py-3 font-bold text-white rounded-lg shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 transition-transform transform duration-300 flex items-center justify-center space-x-2 ${
-              mode === 'edit' 
-                ? 'bg-gradient-to-r from-blue-500 to-cyan-500' 
-                : 'bg-gradient-to-r from-blue-500 to-purple-600'
-            }`}
-          >
-            {isLoading ? (
-                <>
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    <span>Processing...</span>
-                </>
-            ) : (
-                <span>{mode === 'generate' ? 'Generate' : 'Edit Image'}</span>
-            )}
-          </button>
-        </div>
-        
-        {error && (
-            <div className="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-600 dark:text-red-400 text-sm text-center">
-                {error}
+            
+            <div className="flex gap-4">
+              <div className="flex-1">
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-2">Ratio</label>
+                <div className="flex gap-1.5 bg-slate-100 dark:bg-slate-700 p-1.5 rounded-2xl">
+                  {ASPECT_RATIOS.slice(0, 3).map(r => (
+                    <button key={r.value} onClick={() => setAspectRatio(r.value)} className={`flex-1 py-2 rounded-xl text-[10px] font-black tracking-tighter ${aspectRatio === r.value ? 'bg-white dark:bg-slate-500 text-blue-600 dark:text-white shadow-sm' : 'text-slate-500'}`}>{r.label}</button>
+                  ))}
+                </div>
+              </div>
+              {selectedModel === 'gemini-3-pro-image-preview' && (
+                <div className="flex-1">
+                  <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2 ml-2">Quality</label>
+                  <select value={imageSize} onChange={(e) => setImageSize(e.target.value as any)} className="w-full p-2.5 bg-slate-100 dark:bg-slate-700 rounded-xl font-black text-[10px] uppercase text-slate-800 dark:text-white appearance-none border-2 border-transparent focus:border-blue-500 cursor-pointer">
+                    {IMAGE_SIZES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
+
+            <button
+              onClick={handleGenerate}
+              disabled={isLoading || (mode === 'edit' && !uploadedImage)}
+              className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-700 text-white font-black rounded-2xl shadow-xl hover:shadow-blue-500/20 hover:-translate-y-0.5 active:translate-y-0 transition-all disabled:opacity-50 disabled:grayscale disabled:translate-y-0 uppercase tracking-widest flex items-center justify-center gap-3"
+            >
+              {isLoading ? (
+                <>
+                  <div className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Generating...</span>
+                </>
+              ) : (
+                <span>{mode === 'generate' ? 'Generate Art' : 'Magic Edit'}</span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl text-red-600 dark:text-red-400 text-sm font-bold text-center">
+            {error}
+          </div>
         )}
       </div>
 
-      {/* Results Section */}
-      <div className="w-full max-w-7xl mt-12 px-4">
-         {generatedImages.length > 0 ? (
-             <div className="animate-fade-in">
-                 <h2 className="text-2xl font-bold mb-6 text-slate-800 dark:text-white border-l-4 border-purple-500 pl-4">
-                     {mode === 'generate' ? 'Generated Results' : 'Edited Results'}
-                 </h2>
-                 <ImageGrid images={generatedImages} />
-             </div>
-         ) : !isLoading && mode === 'edit' && uploadedImage ? (
-             <div className="text-center text-slate-500 dark:text-slate-400 mt-8">
-                 Enter a prompt above to edit your image.
-             </div>
-         ) : null}
-         
-         {isLoading && (
-             <div className="flex flex-col items-center justify-center mt-12">
-                 <Spinner />
-                 <p className="mt-4 text-slate-600 dark:text-slate-300 font-medium animate-pulse">
-                     {mode === 'generate' ? 'Dreaming up your image...' : 'Applying magic edits...'}
-                 </p>
-             </div>
-         )}
+      <div className="w-full animate-in fade-in slide-in-from-bottom-8 duration-700">
+        {generatedImages.length > 0 && (
+          <div className="space-y-8">
+            <div className="flex items-center gap-4">
+              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700"></div>
+              <h2 className="text-xl font-black text-slate-800 dark:text-white tracking-widest uppercase">Results</h2>
+              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700"></div>
+            </div>
+            <ImageGrid images={generatedImages} />
+          </div>
+        )}
+        
+        {isLoading && (
+          <div className="flex flex-col items-center py-20">
+            <Spinner />
+            <p className="mt-8 text-xl font-black text-slate-400 uppercase tracking-widest animate-pulse">
+              {mode === 'generate' ? 'Synthesizing Vision...' : 'Recalculating Pixels...'}
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );
